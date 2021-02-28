@@ -5,6 +5,7 @@
 #include "BesScaleUtil.h"
 
 #include <QScreen>
+#include <QOperatingSystemVersion>
 
 StackFrame::StackFrame(QApplication *pApplication,QWidget *parent)
     : BesFramelessWidget(parent),mainWidget(nullptr),skinBoxWidget(nullptr),addItemWidget(nullptr)
@@ -14,6 +15,7 @@ StackFrame::StackFrame(QApplication *pApplication,QWidget *parent)
 
     //先初始化设置（由于没有读取皮肤设置，先设置一个默认的皮肤，好在出错弹框时有一个默认皮肤）【第1次设置】
     SetSkin("black");
+    checkOSVersionAndShowInfo();
     showVersionInfo();
     initSetting();
 
@@ -345,5 +347,18 @@ void StackFrame::showVersionInfo(){
         tr("这是测试版"),
         tr("版本： %1\n提交： %2").arg(VERSION_NUMBER).arg(GIT_COMMIT_SHA1));
 #endif
+}
+
+void StackFrame::checkOSVersionAndShowInfo(){
+    QOperatingSystemVersion current = QOperatingSystemVersion::current();
+
+    qDebug() << "OS: " << current;
+
+    if (current < QOperatingSystemVersion(QOperatingSystemVersion::MacOSMojave)){
+        qDebug() << "OS < Mojave";
+        BesMessageBox::information(
+            tr("不兼容的操作系统"),
+            tr("本软件仅能正常运行在 macOS 10.14 及更高版本的操作系统上。\n是否退出？"));
+    }
 }
 

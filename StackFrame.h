@@ -74,6 +74,7 @@ private:
     ThreadLogin login;
     ThreadCheckUpdate checkUpdate;
     void showVersionInfo();
+    void checkOSVersionAndShowInfo();
 };
 
 #endif // STACKFRAME_H
