@@ -1,0 +1,235 @@
+name: linux
+on:
+  push:
+    paths-ignore:
+      - "LICENSE"
+      - "README.md"
+      - "version.txt"
+      - ".github/workflows/windows*.yml"
+      - ".github/workflows/macos*.yml"
+  pull_request:
+    paths-ignore:
+      - "LICENSE"
+      - "README.md"
+      - "version.txt"
+      - ".github/workflows/windows*.yml"
+      - ".github/workflows/macos*.yml"
+  workflow_dispatch:
+
+jobs:
+  build_package_upload:
+    timeout-minutes: 60
+    env:
+      APP_NAME: BesLyric-for-X
+
+      LINUXDEPLOYQT_URL: "https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage"
+      OPENSSL_1_1_1_URL: "https://www.openssl.org/source/openssl-1.1.1k.tar.gz"
+
+      MAKE_INSTALL_DIR_PATH: ${{ github.workspace }}/${{ github.run_id }}/build
+      PACKAGE_DIR_PATH: ${{ github.workspace }}/${{ github.run_id }}/package
+
+      LINUXDEPLOYQT_PATH: "${{ github.workspace }}/linuxdeployqt.AppImage"
+      OPENSSL_SOURCE_CODE_DIR_PATH: "${{ github.workspace }}/openssl_src"
+
+      DEPLOY_PACKAGE_SCRIPTS_DIR_PATH: "${{ github.workspace }}/BesLyric-for-X_Linux_deploy-package"
+
+    runs-on: ubuntu-16.04
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      matrix:
+        qt_ver: [5.12.10, 5.15.2]
+        experimental: [false]
+    steps:
+      - name: What time?
+        id: my_luminous_watch
+        uses: 1466587594/get-current-time@v2
+        with:
+          format: "YYYYMMDDHHmmss"
+
+      # Fetch all history for all tags and branches
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get commit SHA1 and version number from git
+        id: getGitInfo
+        run: |
+          set -o pipefail
+
+          gitCommitSha1=$(git rev-parse HEAD)
+          versionNumber=$(git describe --tags --abbrev=0 | \
+            egrep --only-matching '[0-9]+\.[0-9]+\.[0-9]+')
+          # Note:
+          #   1. '[0-9]' is not equal to '\d' in all implementations.
+          #   2. GNU grep -E / egrep does not support '\d':
+          #     https://stackoverflow.com/questions/3185457/pattern-matching-digits-does-not-work-in-egrep
+          #     https://stackoverflow.com/questions/6901171/is-d-not-supported-by-greps-basic-expressions
+
+          echo "gitCommitSha1 = ${gitCommitSha1}"
+          echo "versionNumber = ${versionNumber}"
+
+          echo "::set-output name=gitCommitSha1::${gitCommitSha1}"
+          echo "::set-output name=versionNumber::${versionNumber}"
+
+      - name: Create directories
+        run: |
+          mkdir -p '${{ env.MAKE_INSTALL_DIR_PATH }}'
+          mkdir -p '${{ env.PACKAGE_DIR_PATH }}'
+
+      - run: |
+          sudo apt-get update
+
+      - run: |
+          # https://doc.qt.io/qt-5/linux.html#debian-ubuntu-apt-get
+          sudo apt install -y libgl1-mesa-dev
+
+          sudo apt install -y libsdl2-dev
+
+          sudo add-apt-repository ppa:jonathonf/ffmpeg-4
+          sudo apt-get update
+          sudo apt install -y \
+            ffmpeg \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libpostproc-dev \
+            libswresample-dev \
+            libswscale-dev
+
+      - name: Cache Qt
+        id: cache_qt
+        uses: actions/cache@v1
+        with:
+          path: ${{ github.workspace }}/../Qt
+          key: QtCache-ubuntu-18.04-${{ matrix.qt_ver }}
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v2.13.0
+        with:
+          version: ${{ matrix.qt_ver }}
+          target: desktop
+          cached: ${{ steps.cache_qt.outputs.cache-hit }}
+
+      - name: Find Qt 5
+        if: ${{ startsWith(matrix.qt_ver, '5') }}
+        run: |
+          echo 'Qt5_DIR = ${{ env.Qt5_DIR }}'
+          echo 'Qt_DIR=${{ env.Qt5_DIR }}' >> ${GITHUB_ENV}
+
+      - name: Find Qt 6
+        if: ${{ startsWith(matrix.qt_ver, '6') }}
+        run: |
+          echo 'Qt6_DIR = ${{ env.Qt6_DIR }}'
+          echo 'Qt_DIR=${{ env.Qt6_DIR }}' >> ${GITHUB_ENV}
+
+      - name: Configure Qt env
+        run: |
+          echo '${{ env.Qt_DIR }}/bin' >> ${GITHUB_PATH}
+
+      - name: Test Qt & env
+        run: |
+          echo ${PATH}
+
+          which 'qmake'
+
+          qmake '-query'
+
+      - name: Build ${{ steps.getGitInfo.outputs.versionNumber }}+${{ steps.getGitInfo.outputs.gitCommitSha1 }}
+        run: |
+          [[ -f '.qmake.stash' ]] && rm '.qmake.stash'
+
+          qmake \
+            '-makefile' \
+            '-o' 'Makefile' \
+            '-spec' 'linux-g++' \
+            '-before' \
+            'CONFIG*=force_debug_info' \
+            'CONFIG*=separate_debug_info' \
+            'GIT_COMMIT_SHA1=${{ steps.getGitInfo.outputs.gitCommitSha1 }}' \
+            'APP_VERSION=${{ steps.getGitInfo.outputs.versionNumber }}' \
+            '-after' \
+            'TARGET=${{ env.APP_NAME }}' \
+            'CONFIG+=release' \
+            '${{ github.workspace }}'
+
+          make -j$(nproc)
+
+          make install INSTALL_ROOT='${{ env.MAKE_INSTALL_DIR_PATH }}'
+
+          ls -la '${{ env.MAKE_INSTALL_DIR_PATH }}'
+
+      - name: Prepare for deployment and packaging
+        run: |
+          set -o pipefail
+
+          # XCB stuff
+          #   ldd .../plugins/platforms/libqxcb.so
+          #   also, see https://github.com/jurplel/install-qt-action/issues/88
+          sudo apt install -y \
+            libxcb-dri2-0 \
+            libxcb-dri3-0 \
+            libxcb-glx0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-present0 \
+            libxcb-randr0 \
+            libxcb-render0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-shm0 \
+            libxcb1 \
+            libxcb-sync1 \
+            libxcb-util1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1
+
+          wget '${{ env.LINUXDEPLOYQT_URL }}' -O '${{ env.LINUXDEPLOYQT_PATH }}'
+          chmod u+x '${{ env.LINUXDEPLOYQT_PATH }}'
+
+          mkdir -p '${{ env.OPENSSL_SOURCE_CODE_DIR_PATH }}'
+          wget '${{ env.OPENSSL_1_1_1_URL }}' -O - |\
+            tar -v -x -z -f - \
+              --strip-components=1 \
+              -C '${{ env.OPENSSL_SOURCE_CODE_DIR_PATH }}'
+          cd '${{ env.OPENSSL_SOURCE_CODE_DIR_PATH }}'
+          ./config
+          make -j$(nproc)
+          make test
+
+      - name: Fetch deploy and package scripts
+        uses: actions/checkout@v2
+        with:
+          repository: "BesLyric-for-X/BesLyric-for-X_Linux_deploy-package"
+          ref: 'db0f069ea1cfd80961f70233e1e394f97067fde7'
+          path: ${{ env.DEPLOY_PACKAGE_SCRIPTS_DIR_PATH }}
+
+      - name: Deploy and package
+        run: |
+          pushd '${{ env.PACKAGE_DIR_PATH }}'
+
+          DESKTOP_FILE_PATH='${{ env.MAKE_INSTALL_DIR_PATH }}/usr/share/applications/BesLyric-for-X.desktop' \
+          OPENSSL_LIB_DIR_PATH='${{ env.OPENSSL_SOURCE_CODE_DIR_PATH }}' \
+          LINUXDEPLOYQT_PATH='${{ env.LINUXDEPLOYQT_PATH }}' \
+          QMAKE_PATH='${{ env.Qt_DIR }}/bin/qmake' \
+          VERSION='${{ steps.getGitInfo.outputs.versionNumber }}' \
+            bash '${{ env.DEPLOY_PACKAGE_SCRIPTS_DIR_PATH }}/call_linuxdeployqt.sh'
+
+          popd
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v2
+        with:
+          if-no-files-found: error
+          name: "${{ steps.my_luminous_watch.outputs.formattedTime }}_${{ matrix.qt_ver }}_${{ env.APP_NAME }}_AppImage"
+          path: "${{ env.PACKAGE_DIR_PATH }}/${{ env.APP_NAME }}-${{ steps.getGitInfo.outputs.versionNumber }}-x86_64.AppImage"
+
+      - name: Upload debug info
+        uses: actions/upload-artifact@v2
+        with:
+          if-no-files-found: error
+          name: "${{ steps.my_luminous_watch.outputs.formattedTime }}_${{ matrix.qt_ver }}_${{ env.APP_NAME }}_debug"
+          path: "${{ env.MAKE_INSTALL_DIR_PATH }}/usr/bin/${{ env.APP_NAME }}.debug"

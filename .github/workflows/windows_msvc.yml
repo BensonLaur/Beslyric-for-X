@@ -1,0 +1,616 @@
+name: win_msvc
+on:
+  push:
+    paths-ignore:
+      - "LICENSE"
+      - "README.md"
+      - ".github/workflows/windows_mingw.yml"
+      - ".github/workflows/linux*.yml"
+      - ".github/workflows/macos*.yml"
+  pull_request:
+    paths-ignore:
+      - "LICENSE"
+      - "README.md"
+      - ".github/workflows/windows_mingw.yml"
+      - ".github/workflows/linux*.yml"
+      - ".github/workflows/macos*.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    timeout-minutes: 60
+    env:
+      APP_NAME: BesLyric-for-X
+
+      SDL2_URL: "https://www.libsdl.org/release/SDL2-devel-2.0.14-VC.zip"
+      OPENSSL_URL: "http://wiki.overbyte.eu/arch/openssl-1.1.1i-win64.zip"
+      JOM_URL: "http://download.qt.io/official_releases/jom/jom.zip"
+      CQTDEPLOYER_URL: "https://github.com/QuasarApp/CQtDeployer/releases/download/1.4.7/WindowsOfflineInstaller.exe"
+      INNO_SETUP_URL: "https://files.jrsoftware.org/is/6/innosetup-6.0.5.exe"
+      EVB_URL: "https://enigmaprotector.com/assets/files/enigmavb.exe"
+
+      B4X_DEP_PATH: ${{ github.workspace }}\GHA\B4X_DEP
+      B4X_DEP_INCLUDE_PATH: ${{ github.workspace }}\GHA\B4X_DEP\include
+      B4X_DEP_INCLUDE_PATH_SDL2: ${{ github.workspace }}\GHA\B4X_DEP\include\SDL2
+      B4X_DEP_LIB_PATH: ${{ github.workspace }}\GHA\B4X_DEP\lib
+
+      MAKE_INSTALL_DIR_PATH: ${{ github.workspace }}\GHA\B4X_BUILD
+      DEPLOY_OUTPUT_PATH: ${{ github.workspace }}\GHA\B4X_DEPLOY
+      PACKAGE_OUTPUT_PATH: ${{ github.workspace }}\GHA\B4X_PACKAGE
+
+      DEPLOYED_DIR_PATH: ${{ github.workspace }}\GHA\B4X_DEPLOYED
+
+      DOWNLOAD_DIR_PATH: ${{ github.workspace }}\GHA\download
+
+      FFMPEG_DECOMPRESS_DIR_PATH: ${{ github.workspace }}\GHA\unzip\FFMPEG
+      SDL2_DECOMPRESS_DIR_PATH: ${{ github.workspace }}\GHA\unzip\SDL2
+      OPENSSL_DECOMPRESS_DIR_PATH: ${{ github.workspace }}\GHA\unzip\OPENSSL
+
+      JOM_DECOMPRESS_DIR_PATH: ${{ github.workspace }}\GHA\Jom
+      CQTDEPLOYER_INSTALLATION_DIR_PATH: ${{ github.workspace }}\GHA\CQtDeployer
+      INNOSETUP_INSTALLATION_DIR_PATH: ${{ github.workspace }}\GHA\InnoSetup
+      EVB_INSTALLATION_DIR_PATH: ${{ github.workspace }}\GHA\EVB
+
+      INNOSETUP_INSTALLATION_LOG_FILE_PATH: ${{ github.workspace }}\GHA\InnoSetup_inst.log
+      EVB_INSTALLATION_LOG_FILE_PATH: ${{ github.workspace }}\GHA\EVB_inst.log
+
+    runs-on: windows-2019
+    strategy:
+      matrix:
+        include:
+          - qt_ver: 5.15.2
+            qt_arch: win64_msvc2019_64
+            ffmpeg_ver: 4.4
+            ffmpeg_provider: "BtbN"
+          - qt_ver: 5.15.2
+            qt_arch: win64_msvc2019_64
+            ffmpeg_ver: 4.4
+            ffmpeg_provider: "gyan.dev"
+
+    steps:
+      - name: What time?
+        id: my_luminous_watch
+        uses: 1466587594/get-current-time@v2
+        with:
+          format: "YYYYMMDDHHmmss"
+
+      # Fetch all history for all tags and branches
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get commit SHA1 and version number from git
+        id: getGitInfo
+        run: |
+          ${gitCommitSha1} = $(git rev-parse HEAD)
+          ${versionNumber} = ( $(git describe --tags --abbrev=0) | `
+            Select-String -Pattern '\d+\.\d+\.\d+' ).Matches[0].Value
+
+          Write-Output -InputObject "gitCommitSha1 = ${gitCommitSha1}"
+          Write-Output -InputObject "versionNumber = ${versionNumber}"
+            
+          Write-Output -InputObject `
+            "::set-output name=gitCommitSha1::${gitCommitSha1}"
+          Write-Output -InputObject `
+            "::set-output name=versionNumber::${versionNumber}"
+
+      - name: Create directories
+        run: |
+          New-Item -Force -Path '${{ env.B4X_DEP_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.B4X_DEP_INCLUDE_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.B4X_DEP_INCLUDE_PATH_SDL2 }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.B4X_DEP_LIB_PATH }}' -ItemType 'Directory'
+
+          New-Item -Force -Path '${{ env.MAKE_INSTALL_DIR_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.DEPLOY_OUTPUT_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.PACKAGE_OUTPUT_PATH }}' -ItemType 'Directory'
+
+          New-Item -Force -Path '${{ env.DOWNLOAD_DIR_PATH }}' -ItemType 'Directory'
+
+          New-Item -Force -Path '${{ env.FFMPEG_DECOMPRESS_DIR_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.SDL2_DECOMPRESS_DIR_PATH }}' -ItemType 'Directory'
+          New-Item -Force -Path '${{ env.OPENSSL_DECOMPRESS_DIR_PATH }}' -ItemType 'Directory'
+
+      # =================================================
+      # ----- Download third-party library packages -----
+
+      - name: Download FFmpeg
+        id: download_ffmpeg
+        uses: pzhlkj6612/action-ffmpeg-windows-shared-build-on-github-downloader@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          provider: ${{ matrix.ffmpeg_provider }}
+          filename_version: ${{ matrix.ffmpeg_ver }}
+
+      - name: Download SDL2
+        id: download_sdl2
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.SDL2_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      - name: Download OpenSSL
+        if: ${{ false }}
+        id: download_openssl
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.OPENSSL_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      # ===================================================
+      # ----- Decompress third-party library packages -----
+
+      - name: Decompress Downloaded FFmpeg
+        id: decompress_ffmpeg
+        run: |
+          Expand-Archive -PassThru `
+            -Path '${{ steps.download_ffmpeg.outputs.filePath }}' `
+            -DestinationPath '${{ env.FFMPEG_DECOMPRESS_DIR_PATH }}'
+
+          Push-Location -Path '${{ env.FFMPEG_DECOMPRESS_DIR_PATH }}\ffmpeg-*'
+
+          Get-ChildItem -Path '.'
+          Write-Output -InputObject "::set-output name=dirPath::$(Get-Location)"
+
+          Pop-Location
+
+      - name: Decompress Downloaded SDL2
+        id: decompress_sdl2
+        run: |
+          Expand-Archive -PassThru `
+            -Path '${{ steps.download_sdl2.outputs.file-path }}' `
+            -DestinationPath '${{ env.SDL2_DECOMPRESS_DIR_PATH }}'
+
+          Push-Location -Path '${{ env.SDL2_DECOMPRESS_DIR_PATH }}\SDL2-*'
+
+          Get-ChildItem -Path '.'
+          Write-Output -InputObject "::set-output name=dirPath::$(Get-Location)"
+
+          Pop-Location
+
+      - name: Decompress Downloaded OpenSSL
+        if: ${{ false }}
+        id: decompress_openssl
+        run: |
+          Expand-Archive -PassThru `
+            -Path '${{ steps.download_openssl.outputs.file-path }}' `
+            -DestinationPath '${{ env.OPENSSL_DECOMPRESS_DIR_PATH }}'
+
+          Push-Location -Path '${{ env.OPENSSL_DECOMPRESS_DIR_PATH }}'
+
+          Get-ChildItem -Path '.'
+          Write-Output -InputObject "::set-output name=dirPath::$(Get-Location)"
+
+          Pop-Location
+
+      # ============================================
+      # ----- Test certain third-party library -----
+
+      - name: Test FFmpeg
+        run: |
+          Push-Location -Path '${{ steps.decompress_ffmpeg.outputs.dirPath }}\bin'
+
+          & '.\ffmpeg.exe' '-version'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "ffmpeg.exe failed: ${LASTEXITCODE}"
+          }
+
+          Pop-Location
+
+      - name: Test OpenSSL
+        if: ${{ false }}
+        run: |
+          Push-Location -Path '${{ steps.decompress_openssl.outputs.dirPath }}'
+
+          & '.\openssl.exe' 'version'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "openssl.exe failed: ${LASTEXITCODE}"
+          }
+
+          Pop-Location
+
+      # ==========================================================
+      # ----- Copy third-party library files to B4X_DEP_PATH -----
+
+      - name: Copy FFmpeg files to B4X_DEP_PATH
+        run: |
+          Push-Location -Path '${{ steps.decompress_ffmpeg.outputs.dirPath }}'
+
+          Copy-Item -PassThru `
+            -Path '.\bin\*.dll' `
+            -Destination '${{ env.B4X_DEP_LIB_PATH }}'
+          Copy-Item -PassThru `
+            -Path '.\lib\*.lib' `
+            -Destination '${{ env.B4X_DEP_LIB_PATH }}'
+          Copy-Item -PassThru -Recurse `
+            -Path '.\include\*' `
+            -Destination '${{ env.B4X_DEP_INCLUDE_PATH }}'
+
+          Pop-Location
+
+      - name: Put SDL2 files into B4X_DEP_PATH
+        run: |
+          Push-Location -Path '${{ steps.decompress_sdl2.outputs.dirPath }}'
+
+          Copy-Item -PassThru `
+            -Path '.\lib\x64\*.dll' `
+            -Destination '${{ env.B4X_DEP_LIB_PATH }}'
+          Copy-Item -PassThru `
+            -Path '.\lib\x64\*.lib' `
+            -Destination '${{ env.B4X_DEP_LIB_PATH }}'
+          Copy-Item -PassThru `
+            -Path '.\include\*.h' `
+            -Destination '${{ env.B4X_DEP_INCLUDE_PATH_SDL2 }}'
+
+          Pop-Location
+
+      - name: Copy OpenSSL files to B4X_DEP_PATH
+        if: ${{ false }}
+        run: |
+          Push-Location -Path '${{ steps.decompress_openssl.outputs.dirPath }}'
+
+          Copy-Item -PassThru `
+            -Path '.\*.dll' `
+            -Destination '${{ env.B4X_DEP_LIB_PATH }}'
+
+          Pop-Location
+
+      - name: Inspect B4X_DEP_PATH
+        run: |
+          Get-ChildItem -Recurse -Path '${{ env.B4X_DEP_PATH }}'
+
+      # ====================================================
+      # ----- Download third-party software installers -----
+
+      - name: Download Jom
+        id: download_jom
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.JOM_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      - name: Download CQtDeployer
+        if: ${{ false }}
+        id: download_cqt
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.CQTDEPLOYER_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      - name: Download Inno Setup
+        if: ${{ false }}
+        id: download_iss
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.INNO_SETUP_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      - name: Download Enigma Virtual Box
+        if: ${{ false }}
+        id: download_evb
+        uses: carlosperate/download-file-action@v1.0.3
+        with:
+          file-url: ${{ env.EVB_URL }}
+          location: ${{ env.DOWNLOAD_DIR_PATH }}
+
+      # ====================================================
+      # ----- Extract or install third-party softwares -----
+
+      - name: Decompress Jom
+        run: |
+          Expand-Archive -PassThru `
+            -Path '${{ steps.download_jom.outputs.file-path }}' `
+            -DestinationPath '${{ env.JOM_DECOMPRESS_DIR_PATH }}'
+
+      - name: Install CQtDeployer
+        if: ${{ false }}
+        run: |
+          Get-ItemProperty -Path '${{ steps.download_cqt.outputs.file-path }}' | Format-List
+
+          $p = Start-Process -Wait -NoNewWindow -PassThru `
+            -FilePath '${{ steps.download_cqt.outputs.file-path }}' `
+            -ArgumentList @(
+              '--script', '${{ github.workspace }}\.github\workflows\qt-installer-noninteractive.qs',
+              '--verbose',
+              'targetDirectory="${{ env.CQTDEPLOYER_INSTALLATION_DIR_PATH }}"'
+            )
+          If ($p.ExitCode -ne 0) { throw "Exit code is $($p.ExitCode.toString())" }
+
+      - name: Install Inno Setup
+        if: ${{ false }}
+        run: |
+          Get-ItemProperty -Path '${{ steps.download_iss.outputs.file-path }}' | Format-List
+
+          $p = Start-Process -Wait -NoNewWindow -PassThru `
+            -FilePath '${{ steps.download_iss.outputs.file-path }}' `
+            -ArgumentList @(
+              '/VERYSILENT',
+              '/LOG="${{ env.INNOSETUP_INSTALLATION_LOG_FILE_PATH }}"',
+              '/DIR="${{ env.INNOSETUP_INSTALLATION_DIR_PATH }}"',
+              '/CURRENTUSER'
+            )
+          If ($p.ExitCode -ne 0) { throw "Exit code is $($p.ExitCode.toString())" }
+          Get-Content '${{ env.INNOSETUP_INSTALLATION_LOG_FILE_PATH }}'
+
+      - name: Install Enigma Virtual Box
+        if: ${{ false }}
+        run: |
+          Get-ItemProperty -Path '${{ steps.download_evb.outputs.file-path }}' | Format-List
+
+          $p = Start-Process -Wait -NoNewWindow -PassThru `
+            -FilePath '${{ steps.download_evb.outputs.file-path }}' `
+            -ArgumentList @(
+              '/VERYSILENT',
+              '/LOG="${{ env.EVB_INSTALLATION_LOG_FILE_PATH }}"',
+              '/DIR="${{ env.EVB_INSTALLATION_DIR_PATH }}"',
+              '/CURRENTUSER'
+            )
+          If ($p.ExitCode -ne 0) { throw "Exit code is $($p.ExitCode.toString())" }
+          Get-Content '${{ env.EVB_INSTALLATION_LOG_FILE_PATH }}'
+
+      - name: Find CQtDeployer 1.4
+        if: ${{ false && contains(env.CQTDEPLOYER_URL, '/download/1.4') }}
+        run: |
+          Write-Output -InputObject '${{ env.CQTDEPLOYER_INSTALLATION_DIR_PATH }}\1.4'
+          Write-Output -InputObject 'CQTDEPLOYER_DIR=${{ env.CQTDEPLOYER_INSTALLATION_DIR_PATH }}\1.4' | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: Find CQtDeployer 1.5
+        if: ${{ false && contains(env.CQTDEPLOYER_URL, '/download/1.5') }}
+        run: |
+          Write-Output -InputObject '${{ env.CQTDEPLOYER_INSTALLATION_DIR_PATH }}\1.5'
+          Write-Output -InputObject 'CQTDEPLOYER_DIR=${{ env.CQTDEPLOYER_INSTALLATION_DIR_PATH }}\1.5' | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      # ======================================
+      # ----- Test third-party softwares -----
+
+      - name: Test Jom
+        run: |
+          Push-Location -Path '${{ env.JOM_DECOMPRESS_DIR_PATH }}'
+
+          & '.\jom.exe' '/H'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "jom.exe failed: ${LASTEXITCODE}"
+          }
+
+          Pop-Location
+
+      - name: Test CQtDeployer
+        if: ${{ false }}
+        run: |
+          Push-Location -Path '${{ env.CQTDEPLOYER_DIR }}'
+
+          & '.\cqtdeployer.bat' 'version'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "cqtdeployer.bat failed: ${LASTEXITCODE}"
+          }
+
+          Pop-Location
+
+      - name: Test Inno Setup
+        if: ${{ false }}
+        run: |
+          Push-Location -Path '${{ env.INNOSETUP_INSTALLATION_DIR_PATH }}'
+
+          # & '.\ISCC.exe' '/?' # Ignore return value
+          Start-Process -Wait -NoNewWindow -PassThru -FilePath '.\ISCC.exe' -ArgumentList @('/?')
+
+          Pop-Location
+
+      - name: Test Enigma Virtual Box
+        if: ${{ false }}
+        run: |
+          Push-Location -Path '${{ env.EVB_INSTALLATION_DIR_PATH }}'
+
+          & '.\enigmavbconsole.exe'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "enigmavbconsole.exe failed: ${LASTEXITCODE}"
+          }
+
+          Pop-Location
+
+      # ====================
+      # ----- Setup Qt -----
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v1
+        with:
+          path: ${{ github.workspace }}/../Qt
+          key: QtCache-windows-2019-msvc-${{ matrix.ffmpeg_provider }}-${{ matrix.ffmpeg_ver }}-${{ matrix.qt_ver }}-${{ matrix.qt_arch }}
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v2.13.0
+        with:
+          version: ${{ matrix.qt_ver }}
+          target: desktop
+          arch: ${{ matrix.qt_arch }}
+          cached: ${{ steps.cache-qt.outputs.cache-hit }}
+
+      - name: Find Qt 5
+        if: ${{ startsWith(matrix.qt_ver, '5.') }}
+        run: |
+          Write-Output -InputObject 'Qt5_DIR = ${{ env.Qt5_DIR }}'
+          Write-Output -InputObject 'Qt_DIR=${{ env.Qt5_DIR }}' | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: Find Qt 6
+        if: ${{ startsWith(matrix.qt_ver, '6.') }}
+        run: |
+          Write-Output -InputObject 'Qt6_DIR = ${{ env.Qt6_DIR }}'
+          Write-Output -InputObject 'Qt_DIR=${{ env.Qt6_DIR }}' | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: Configure Qt env
+        run: |
+          Write-Output -InputObject '${{ env.Qt_DIR }}\bin' | `
+            Out-File -FilePath ${Env:\GITHUB_PATH} -Encoding utf8 -Append
+
+      - name: Test Qt & env
+        run: |
+          Write-Output -InputObject ${Env:\Path}
+
+          Get-Command -Name 'qmake.exe' | Format-List
+          & 'qmake.exe' '-query'
+          if (${LASTEXITCODE} -ne 0) {
+            throw "qmake.exe failed: ${LASTEXITCODE}"
+          }
+
+      # ======================
+      # ----- Setup MSVC -----
+
+      - name: Configure MSVC v141
+        if: ${{ contains(matrix.qt_arch, 'msvc2017') }}
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: 'x64'
+          toolset: '14.1'
+
+      - name: Configure MSVC v142
+        if: ${{ contains(matrix.qt_arch, 'msvc2019') }}
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: 'x64'
+          toolset: '14.2'
+
+      - name: Inspect the environment
+        run: |
+          Get-ChildItem -Path Env:\ | Format-List
+
+      - name: vcVarsPath v141
+        if: ${{ false && contains(matrix.qt_arch, 'msvc2017') }}
+        run: |
+          Write-Output "componentID='Microsoft.VisualStudio.Component.VC.v141.x86.x64'" | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: vcVarsPath v142
+        if: ${{ false && contains(matrix.qt_arch, 'msvc2019') }}
+        run: |
+          # Why not "Microsoft.VisualStudio.Component.VC.v142.x86.x64"?
+
+          Write-Output "componentID='Microsoft.VisualStudio.Component.VC.Tools.x86.x64'" | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: Get vcVarsPath
+        if: ${{ false }}
+        run: |
+          $vswhere = "${Env:\ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          If (-Not (Test-Path -Path $vswhere -PathType Leaf)) { throw "'$vswhere' does not exist" }
+
+          $vswhereCommonArgs = @('-latest', '-products', '*', '-requires', ${{ env.componentID }})
+          $vcInstallationPathArgs = @($vswhereCommonArgs, "-property", "installationPath")
+          $vcDisplayNameArgs = @($vswhereCommonArgs, "-property", "displayName")
+          $vcInstallationVersionArgs = @($vswhereCommonArgs, "-property", "installationVersion")
+
+          $vcInstallationPath = & $vswhere @vcInstallationPathArgs
+          If ($LastExitCode -ne 0) { throw "Exit code is $LastExitCode" }
+
+          $vcDisplayName = & $vswhere @vcDisplayNameArgs
+          If ($LastExitCode -ne 0) { throw "Exit code is $LastExitCode" }
+
+          $vcInstallationVersion = & $vswhere @vcInstallationVersionArgs
+          If ($LastExitCode -ne 0) { throw "Exit code is $LastExitCode" }
+
+          $vcVarsPath = Join-Path -Path $vcInstallationPath -ChildPath 'VC\Auxiliary\Build'
+          Write-Output "vcVarsPath=$vcVarsPath" | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+          Write-Output "vcDisplayName=$vcDisplayName" | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+          Write-Output "vcInstallationVersion=$vcInstallationVersion" | `
+            Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+
+      - name: Configure MSVC (x64 only)
+        if: ${{ false }}
+        run: |
+          Push-Location -Path "${{ env.vcVarsPath }}"
+          & cmd.exe @("/c", "vcvarsall.bat x64 & set") | `
+              ForEach-Object {
+              If ($_ -match "=") {
+                  $v = $_ -Split "=", 2
+                  $envName = "$($v[0])"
+                  $envValue = "$($v[1])"
+                  # Set-Item -Force -Path "Env:\$envName" -Value "$envValue"
+                  Write-Output "$envName=$envValue" | Out-File -FilePath ${Env:\GITHUB_ENV} -Encoding utf8 -Append
+              }
+          }
+          If ($LastExitCode -ne 0) { throw "Exit code is $LastExitCode" }
+          Pop-Location
+
+          Write-Output -InputObject "${{ env.vcDisplayName }} ${{ env.vcInstallationVersion }} x64 Command Prompt variables set."
+          # Get-ChildItem Env:\ | Format-List
+
+      - name: crt and ucrt
+        if: ${{ false }}
+        run: |
+          $crtDirPath = `
+              ${Env:\VCToolsRedistDir} | `
+              Join-Path -ChildPath ${Env:\Platform} # | Join-Path -ChildPath "Microsoft.VC${???/141/142}.CRT" # -recursiveDepth saved my day!
+
+          Write-Output -InputObject "crtDirPath = $crtDirPath"
+
+          $ucrtDirPath = `
+              ${Env:\WindowsSdkDir} | `
+              Join-Path -ChildPath 'Redist' | `
+              Join-Path -ChildPath ${Env:\UCRTVersion} | `
+              Join-Path -ChildPath 'ucrt/DLLs/' | `
+              Join-Path -ChildPath ${Env:\Platform}
+
+          Write-Output -InputObject "ucrtDirPath = $ucrtDirPath"
+
+          Write-Output "crtDirPath=${crtDirPath}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Output "ucrtDirPath=${ucrtDirPath}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # =====================================
+      # ----- Missile launch confirmed! -----
+
+      - name: Build ${{ steps.getGitInfo.outputs.versionNumber }}+${{ steps.getGitInfo.outputs.gitCommitSha1 }}
+        run: |
+          if (Test-Path -Path '.qmake.stash' -PathType Leaf) {
+            Remove-Item -Path '.qmake.stash'
+          }
+
+          & 'qmake.exe' @(
+            , '-makefile'
+            , '-o', 'Makefile'
+            , '-spec', 'win32-msvc'
+            , '-before'
+            , 'CONFIG*=force_debug_info'
+            , 'CONFIG*=separate_debug_info'
+            , 'GIT_COMMIT_SHA1=${{ steps.getGitInfo.outputs.gitCommitSha1 }}'
+            , 'APP_VERSION=${{ steps.getGitInfo.outputs.versionNumber }}'
+            , 'B4X_DEP_PATH=${{ env.B4X_DEP_PATH }}'
+            , '-after'
+            , 'TARGET=${{ env.APP_NAME }}'
+            , 'CONFIG+=release'
+            , '${{ github.workspace }}'
+          )
+          if (${LASTEXITCODE} -ne 0) {
+            throw "qmake.exe failed: ${LASTEXITCODE}"
+          }
+
+          & '${{ env.JOM_DECOMPRESS_DIR_PATH }}/jom.exe' @(
+            , '-f', 'Makefile'
+            , 'release'
+          )
+          if (${LASTEXITCODE} -ne 0) {
+            throw "jom.exe failed: ${LASTEXITCODE}"
+          }
+
+          & '${{ env.JOM_DECOMPRESS_DIR_PATH }}/jom.exe' @(
+            , 'install'
+            , 'INSTALL_ROOT=${{ env.MAKE_INSTALL_DIR_PATH }}'
+          )
+          if (${LASTEXITCODE} -ne 0) {
+            throw "jom.exe install failed: ${LASTEXITCODE}"
+          }
+
+          Get-ChildItem -Recurse -Path '${{ env.MAKE_INSTALL_DIR_PATH }}'
+
+      - name: Upload built files
+        uses: actions/upload-artifact@v2
+        with:
+          if-no-files-found: error
+          name: "${{ steps.my_luminous_watch.outputs.formattedTime }}_${{ matrix.qt_ver }}_${{matrix.qt_arch}}_${{ matrix.ffmpeg_provider }}_${{ matrix.ffmpeg_ver }}"
+          path: "${{ env.MAKE_INSTALL_DIR_PATH }}/**/*"
